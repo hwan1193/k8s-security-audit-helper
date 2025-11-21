@@ -1,5 +1,7 @@
 # k8s-security-audit-helper
 
+./k8s_security_audit.sh --trivy-scan 3 <-- 실행명령어
+
 # k8s-security-audit.sh
 
 Simple, read-only Kubernetes security audit helper script.
