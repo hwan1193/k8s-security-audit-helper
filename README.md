@@ -21,3 +21,13 @@ bash k8s_security_audit.sh -n default --out-dir ./reports
 bash k8s_security_audit.sh --trivy-scan 5
 
 ---
+
+## Prerequisites
+
+- kubectl (configured to access the target cluster)
+- jq
+- (Optional) Trivy – for `--trivy-scan` option
+- Read-only access is recommended, but cluster-wide list permissions are required:
+  - pods
+  - namespaces
+  - networkpolicies
