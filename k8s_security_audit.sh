@@ -7,6 +7,8 @@
 # - Lists images and finds :latest / tagless images
 # - Summarizes NetworkPolicies per namespace
 # - Summarizes Pod Security Admission labels
+# - Summarizes RBAC bindings (ClusterRoleBinding / RoleBinding)
+# - Summarizes Service / Ingress exposure
 # - (Optional) Runs Trivy image scans for a few images
 #
 # Author: Your Name (Do-yoon Park)
@@ -51,7 +53,6 @@ EOF
 }
 
 log() {
-  # timestamped log
   echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" >&2
 }
 
@@ -71,7 +72,6 @@ safe_mkdir() {
 }
 
 sanitize_filename() {
-  # Replace / and : and @ with _
   echo "$1" | sed -e 's/[\/:@]/_/g'
 }
 
@@ -160,11 +160,9 @@ collect_images() {
   local out_csv="${OUT_DIR}/images.csv"
   local latest_csv="${OUT_DIR}/images_latest_or_tagless.csv"
 
-  # CSV header
   echo "namespace,pod,container,image,image_tag,is_latest_or_tagless" > "$out_csv"
   echo "namespace,pod,container,image,image_tag,reason" > "$latest_csv"
 
-  # Get pods JSON
   local tmp_json
   tmp_json="$(mktemp)"
   if ! "$KUBECTL_BIN" get pods "${K_NS_ARGS[@]}" -o json > "$tmp_json" 2>/dev/null; then
@@ -173,7 +171,6 @@ collect_images() {
     return 0
   fi
 
-  # Extract info using jq
   "$JQ_BIN" -r '
     .items[]? as $pod |
     ($pod.metadata.namespace // "default") as $ns |
@@ -181,7 +178,6 @@ collect_images() {
     ($pod.spec.containers // [])[]? as $c |
     ($c.name // "") as $cname |
     ($c.image // "") as $image |
-    # split image into name:tag
     (if ($image | contains(":")) then
        ($image | split(":") | .[1])
      else
@@ -196,17 +192,14 @@ collect_images() {
     ] | @csv
   ' "$tmp_json" >> "$out_csv"
 
-  # Detect latest / tagless
   tail -n +2 "$out_csv" | while IFS=, read -r ns pod ctn image tag; do
-    # remove quotes
     ns=${ns//\"/}
     pod=${pod//\"/}
     ctn=${ctn//\"/}
     image=${image//\"/}
     tag=${tag//\"/}
 
-    # Determine reason
-    reason=""
+    local reason=""
     if [[ "$image" != "" && "$image" != *":"* ]]; then
       reason="tagless_image"
     elif [[ "$tag" == "latest" ]]; then
@@ -239,22 +232,21 @@ collect_networkpolicies() {
     return 0
   fi
 
-  "$JQ_BIN" -r '
+  if ! "$JQ_BIN" -r '
     .items[]? |
     (.metadata.namespace // "default") as $ns |
     {namespace: $ns} |
     group_by(.namespace) |
     map({namespace: .[0].namespace, count: length})[] |
     "\(.namespace),\(.count)"
-  ' "$tmp_json" >> "$out_csv" || {
-    # Fallback: simple per-item loop if jq group_by fails
+  ' "$tmp_json" >> "$out_csv" 2>/dev/null; then
     log "jq group_by failed, using simple fallback for NetworkPolicy summary."
-    rm -f "$out_csv"
+    : > "$out_csv"
     echo "namespace,total_policies" > "$out_csv"
     "$JQ_BIN" -r '.items[]?.metadata.namespace // "default"' "$tmp_json" \
       | sort | uniq -c \
       | awk '{print $2","$1}' >> "$out_csv"
-  }
+  fi
 
   rm -f "$tmp_json"
 }
@@ -290,7 +282,129 @@ collect_psa_labels() {
 }
 
 #######################################
-# 5. Optional: Trivy image scan
+# 5. RBAC summary (ClusterRoleBinding / RoleBinding)
+#######################################
+
+collect_rbac_summary() {
+  log "Collecting RBAC summary..."
+
+  # ClusterRoleBindings
+  local out_crb="${OUT_DIR}/rbac_clusterrolebindings.csv"
+  echo "binding,role,subject_kind,subject_name,subject_namespace" > "$out_crb"
+
+  local tmp_json
+  tmp_json="$(mktemp)"
+  if "$KUBECTL_BIN" get clusterrolebinding -o json > "$tmp_json" 2>/dev/null; then
+    "$JQ_BIN" -r '
+      .items[]? as $b |
+      ($b.metadata.name // "") as $bname |
+      ($b.roleRef.kind // "") as $rkind |
+      ($b.roleRef.name // "") as $rname |
+      ($b.subjects // [])[]? as $s |
+      ($s.kind // "") as $sk |
+      ($s.name // "") as $sn |
+      ($s.namespace // "") as $sns |
+      [
+        $bname,
+        ($rkind + "/" + $rname),
+        $sk,
+        $sn,
+        $sns
+      ] | @csv
+    ' "$tmp_json" >> "$out_crb"
+  else
+    log "No ClusterRoleBinding resources found."
+  fi
+  rm -f "$tmp_json"
+
+  # RoleBindings (namespaced)
+  local out_rb="${OUT_DIR}/rbac_rolebindings.csv"
+  echo "namespace,binding,role,subject_kind,subject_name,subject_namespace" > "$out_rb"
+
+  tmp_json="$(mktemp)"
+  if "$KUBECTL_BIN" get rolebinding "${K_NS_ARGS[@]}" -o json > "$tmp_json" 2>/dev/null; then
+    "$JQ_BIN" -r '
+      .items[]? as $b |
+      ($b.metadata.namespace // "default") as $ns |
+      ($b.metadata.name // "") as $bname |
+      ($b.roleRef.kind // "") as $rkind |
+      ($b.roleRef.name // "") as $rname |
+      ($b.subjects // [])[]? as $s |
+      ($s.kind // "") as $sk |
+      ($s.name // "") as $sn |
+      ($s.namespace // "") as $sns |
+      [
+        $ns,
+        $bname,
+        ($rkind + "/" + $rname),
+        $sk,
+        $sn,
+        $sns
+      ] | @csv
+    ' "$tmp_json" >> "$out_rb"
+  else
+    log "No RoleBinding resources found for selected namespace scope."
+  fi
+  rm -f "$tmp_json"
+}
+
+#######################################
+# 6. Service / Ingress exposure summary
+#######################################
+
+collect_ingress_service_summary() {
+  log "Collecting Service exposure summary..."
+  local svc_csv="${OUT_DIR}/services_exposure.csv"
+  echo "namespace,name,type,cluster_ip,external_ips,loadbalancer,endpoints" > "$svc_csv"
+
+  local tmp_json
+  tmp_json="$(mktemp)"
+  if "$KUBECTL_BIN" get svc "${K_NS_ARGS[@]}" -o json > "$tmp_json" 2>/dev/null; then
+    "$JQ_BIN" -r '
+      .items[]? as $s |
+      ($s.metadata.namespace // "default") as $ns |
+      ($s.metadata.name // "") as $name |
+      ($s.spec.type // "") as $type |
+      ($s.spec.clusterIP // "") as $cip |
+      (($s.spec.externalIPs // []) | join(";")) as $ext |
+      (if $s.status.loadBalancer.ingress then
+         ($s.status.loadBalancer.ingress
+           | map(.ip // .hostname // "")
+           | join(";"))
+       else "" end) as $lb |
+      (($s.spec.ports // [])
+        | map((.port|tostring)+"/"+(.protocol // "TCP"))
+        | join(";")) as $ports |
+      [$ns,$name,$type,$cip,$ext,$lb,$ports] | @csv
+    ' "$tmp_json" >> "$svc_csv"
+  else
+    log "No Service resources found for selected namespace scope."
+  fi
+  rm -f "$tmp_json"
+
+  log "Collecting Ingress exposure summary..."
+  local ing_csv="${OUT_DIR}/ingress_exposure.csv"
+  echo "namespace,name,ingress_class,hosts,tls_enabled" > "$ing_csv"
+
+  tmp_json="$(mktemp)"
+  if "$KUBECTL_BIN" get ingress "${K_NS_ARGS[@]}" -o json > "$tmp_json" 2>/dev/null; then
+    "$JQ_BIN" -r '
+      .items[]? as $ing |
+      ($ing.metadata.namespace // "default") as $ns |
+      ($ing.metadata.name // "") as $name |
+      ($ing.spec.ingressClassName // "") as $cls |
+      ([$ing.spec.rules[]?.host] | map(. // "") | unique | join(";")) as $hosts |
+      (if ($ing.spec.tls // []) | length > 0 then "true" else "false" end) as $tls |
+      [$ns,$name,$cls,$hosts,$tls] | @csv
+    ' "$tmp_json" >> "$ing_csv"
+  else
+    log "No Ingress resources found for selected namespace scope."
+  fi
+  rm -f "$tmp_json"
+}
+
+#######################################
+# 7. Optional: Trivy image scan
 #######################################
 
 run_trivy_scans() {
@@ -312,7 +426,6 @@ run_trivy_scans() {
     return 0
   fi
 
-  # Extract unique image names (skip header)
   mapfile -t images < <(tail -n +2 "$images_file" | cut -d',' -f4 | tr -d '"' | sort -u)
 
   local count=0
@@ -330,7 +443,6 @@ run_trivy_scans() {
     local out_report="${OUT_DIR}/trivy_${count}_${san}.txt"
 
     log "  [${count}/${TRIVY_SCAN_LIMIT}] trivy image scan: ${img}"
-    # Simple text output; user can parse further if needed
     trivy image --severity CRITICAL,HIGH --ignore-unfixed --no-progress "$img" > "$out_report" 2>&1 || {
       log "  Trivy scan failed for ${img} (see ${out_report})"
     }
@@ -338,7 +450,7 @@ run_trivy_scans() {
 }
 
 #######################################
-# 6. Summary markdown
+# 8. Summary markdown
 #######################################
 
 write_summary() {
@@ -352,8 +464,17 @@ write_summary() {
     echo
     echo "## Files"
     echo
-    for f in cluster_info.txt images.csv images_latest_or_tagless.csv \
-             networkpolicies_summary.csv psa_namespace_labels.csv; do
+    for f in \
+        cluster_info.txt \
+        images.csv \
+        images_latest_or_tagless.csv \
+        networkpolicies_summary.csv \
+        psa_namespace_labels.csv \
+        rbac_clusterrolebindings.csv \
+        rbac_rolebindings.csv \
+        services_exposure.csv \
+        ingress_exposure.csv
+    do
       if [[ -f "${OUT_DIR}/${f}" ]]; then
         echo "- \`${f}\`"
       fi
@@ -372,8 +493,10 @@ write_summary() {
     echo "## Notes"
     echo
     echo "- This script is read-only: it does not modify any Kubernetes resources."
+    echo "- RBAC summaries show who is bound to which roles (ClusterRoleBinding / RoleBinding)."
+    echo "- Service / Ingress summaries help identify external exposure (LoadBalancer, NodePort, public hosts, TLS usage)."
     echo "- All checks are best-effort and may not cover every security requirement."
-    echo "- You can extend this script with more checks (RBAC review, Ingress/Service exposure, etc.)."
+    echo "- You can extend this script with more checks (CIS-style policies, privileged pods, hostPath, etc.)."
   } > "$SUMMARY_MD"
 }
 
@@ -385,6 +508,8 @@ collect_cluster_info
 collect_images
 collect_networkpolicies
 collect_psa_labels
+collect_rbac_summary
+collect_ingress_service_summary
 run_trivy_scans
 write_summary
 
