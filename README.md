@@ -11,6 +11,8 @@ Simple, read-only Kubernetes security audit helper script.
 - Detects `:latest` or tagless images (`images_latest_or_tagless.csv`)
 - Summarizes NetworkPolicies per namespace (`networkpolicies_summary.csv`)
 - Summarizes Pod Security Admission labels (`psa_namespace_labels.csv`)
+- Summarizes RBAC bindings (ClusterRoleBinding / RoleBinding) into CSV
+- Summarizes external exposure of Services and Ingresses
 - (Optional) Runs [Trivy](https://github.com/aquasecurity/trivy) image scans for a few images
 
 ## Usage
@@ -58,6 +60,10 @@ k8s_audit_20250719_120000/
   ├─ images_latest_or_tagless.csv
   ├─ networkpolicies_summary.csv
   ├─ psa_namespace_labels.csv
+  ├─ rbac_clusterrolebindings.csv
+  ├─ rbac_rolebindings.csv
+  ├─ services_exposure.csv
+  ├─ ingress_exposure.csv
   ├─ trivy_1_nginx_1.25.txt
   └─ SUMMARY.md
 
