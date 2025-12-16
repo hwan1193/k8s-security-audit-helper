@@ -48,58 +48,57 @@ cd k8s-security-audit-helper
 
 ## 1) Bash (Linux/macOS/WSL) → k8s_security_audit.sh
 
-권한부여 :
+# 권한부여 :
 
 chmod +x k8s_security_audit.sh
 
-전체 네임스페이스 점검 (기본값)
+# 전체 네임스페이스 점검 (기본값)
 
 ./k8s_security_audit.sh
 
-특정 네임스페이스만 점검 :
+# 특정 네임스페이스만 점검 :
 
 ./k8s_security_audit.sh -n default
 
-# 또는
+## 또는
 
 ./k8s_security_audit.sh --out-dir ./reports
 
-결과 저장 폴더 지정 :
+# 결과 저장 폴더 지정 :
 
 ./k8s_security_audit.sh -o ./reports
 
-# 또는
+## 또는
 
 ./k8s_security_audit.sh --out-dir ./reports
 
-(옵션) Trivy 스캔 (최대 N개 이미지) :
+# (옵션) Trivy 스캔 (최대 N개 이미지) :
 
 ./k8s_security_audit.sh --trivy-scan 3
 
-2) PowerShell (Windows) → k8s_security_audit.ps1
+# 2) PowerShell (Windows) → k8s_security_audit.ps1
 
-기본 실행 (전체 네임스페이스) :
+# 기본 실행 (전체 네임스페이스) :
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\k8s_security_audit.ps1
 
-특정 네임스페이스 점검 :
+# 특정 네임스페이스 점검 :
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\k8s_security_audit.ps1 -Namespace default
 
-결과 저장 폴더 지정 :
+# 결과 저장 폴더 지정 :
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\k8s_security_audit.ps1 -OutDir .\reports
 
-(옵션) Trivy 스캔 (최대 N개 이미지)
+# (옵션) Trivy 스캔 (최대 N개 이미지)
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\k8s_security_audit.ps1 -TrivyScanLimit 3
 
-kubectl 경로 지정(환경에 따라)
+# kubectl 경로 지정(환경에 따라)
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\k8s_security_audit.ps1 -KubectlPath "C:\path\to\kubectl.exe"
 
-참고: PowerShell 버전은 jq 없이 ConvertFrom-Json으로 파싱합니다.
-
+### 참고: PowerShell 버전은 jq 없이 ConvertFrom-Json으로 파싱합니다.
 
 
 
